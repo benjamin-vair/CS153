@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catan Coach — opening advisor</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1b2430; --ink:#e6edf3; --muted:#9fb0c0; --accent:#4da3ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;
+         background:var(--bg); color:var(--ink); display:flex; min-height:100vh; }
+  #boardwrap { flex:1; display:flex; align-items:center; justify-content:center; padding:16px; }
+  svg { width:100%; height:auto; max-height:96vh; }
+  #panel { width:330px; background:var(--panel); padding:18px; overflow:auto; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:12px; margin:0 0 16px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+       margin:18px 0 8px; border-top:1px solid #2c3a4a; padding-top:14px; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  button.chip { border:1px solid #33445a; background:#23303f; color:var(--ink);
+                border-radius:7px; padding:6px 9px; cursor:pointer; font-size:13px; }
+  button.chip.sel { outline:2px solid var(--accent); border-color:var(--accent); }
+  select { background:#23303f; color:var(--ink); border:1px solid #33445a;
+           border-radius:7px; padding:6px; }
+  .swatch { width:14px; height:14px; border-radius:3px; display:inline-block; margin-right:6px; vertical-align:-2px; }
+  #go { width:100%; margin-top:14px; padding:11px; font-size:15px; font-weight:600;
+        background:var(--accent); color:#04121f; border:none; border-radius:9px; cursor:pointer; }
+  #go:hover { filter:brightness(1.07); }
+  #out { margin-top:14px; font-size:13px; }
+  .rec { padding:7px 9px; margin:5px 0; background:#1f2a36; border-left:3px solid var(--accent); border-radius:5px; }
+  .rec b { color:var(--accent); }
+  .err { color:#ff9b8a; background:#2a1d1d; padding:9px; border-radius:6px; }
+  .hint { color:var(--muted); font-size:12px; margin:4px 0 0; }
+  polygon.hex { stroke:#0c0f14; stroke-width:2; cursor:pointer; }
+  text { font-family:system-ui,sans-serif; pointer-events:none; user-select:none; }
+  circle.node { cursor:pointer; stroke:#0c0f14; stroke-width:1.5; }
+</style>
+</head>
+<body>
+  <div id="boardwrap"><svg id="svg"></svg></div>
+  <div id="panel">
+    <h1>Catan Coach</h1>
+    <p class="sub">Click hexes to set terrain, click corners to place pieces, then get the best opening spot.</p>
+
+    <h2>1 · Paint terrain</h2>
+    <div class="row" id="resPal"></div>
+    <div class="row" style="margin-top:8px;">
+      <span class="hint">Number:</span>
+      <select id="numSel"></select>
+    </div>
+    <p class="hint">Selected resource + number → click a hex.</p>
+
+    <h2>2 · Place pieces</h2>
+    <div class="row" id="playerPal"></div>
+    <div class="row" style="margin-top:8px;">
+      <button class="chip sel" id="tool-settlement" data-piece="settlement">Settlement</button>
+      <button class="chip" id="tool-city" data-piece="city">City</button>
+      <button class="chip" id="clearPieces">Clear all</button>
+    </div>
+    <p class="hint">Click a corner to place/remove. (Click again to remove.)</p>
+
+    <h2>3 · Advise</h2>
+    <div class="row">
+      <span class="hint">Best spot for:</span>
+      <select id="adviseSel"></select>
+    </div>
+    <button id="go">Get advice</button>
+    <div id="out"></div>
+  </div>
+
+<script>
+const RES = {
+  WOOD:"#2e7d32", BRICK:"#b5512c", SHEEP:"#8bc34a",
+  WHEAT:"#e8b923", ORE:"#7e909c", DESERT:"#cdb38b"
+};
+const PLAYERS = { RED:"#e5484d", BLUE:"#3b82f6", WHITE:"#e6edf3", ORANGE:"#f59e0b" };
+const SVGNS = "http://www.w3.org/2000/svg";
+
+let L, tiles, sel = {res:"WHEAT", num:6, player:"RED", piece:"settlement", advise:"RED"};
+let owner = {};  // nodeId -> {color, piece}
+
+const $ = s => document.querySelector(s);
+function el(tag, attrs={}, parent=null){
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+async function init(){
+  L = await (await fetch("/api/layout")).json();
+  tiles = JSON.parse(JSON.stringify(L.defaultTiles));
+  buildPalettes();
+  drawBoard();
+}
+
+function buildPalettes(){
+  const rp = $("#resPal");
+  for (const r in RES){
+    const b = document.createElement("button");
+    b.className = "chip" + (r===sel.res?" sel":"");
+    b.innerHTML = `<span class="swatch" style="background:${RES[r]}"></span>${r[0]+r.slice(1).toLowerCase()}`;
+    b.onclick = () => { sel.res=r; document.querySelectorAll("#resPal .chip").forEach(x=>x.classList.remove("sel")); b.classList.add("sel"); };
+    rp.appendChild(b);
+  }
+  const ns = $("#numSel");
+  [2,3,4,5,6,8,9,10,11,12].forEach(n=>{ const o=document.createElement("option"); o.value=n; o.textContent=n; ns.appendChild(o); });
+  ns.value = 6; ns.onchange = () => sel.num = +ns.value;
+
+  const pp = $("#playerPal");
+  for (const p in PLAYERS){
+    const b = document.createElement("button");
+    b.className = "chip" + (p===sel.player?" sel":"");
+    b.innerHTML = `<span class="swatch" style="background:${PLAYERS[p]}"></span>${p}`;
+    b.onclick = () => { sel.player=p; document.querySelectorAll("#playerPal .chip").forEach(x=>x.classList.remove("sel")); b.classList.add("sel"); };
+    pp.appendChild(b);
+  }
+  $("#tool-settlement").onclick = () => setPiece("settlement");
+  $("#tool-city").onclick = () => setPiece("city");
+  $("#clearPieces").onclick = () => { owner = {}; drawBoard(); };
+
+  const as = $("#adviseSel");
+  for (const p in PLAYERS){ const o=document.createElement("option"); o.value=p; o.textContent=p; as.appendChild(o); }
+  as.value = sel.advise; as.onchange = () => sel.advise = as.value;
+  $("#go").onclick = getAdvice;
+}
+function setPiece(p){ sel.piece=p; $("#tool-settlement").classList.toggle("sel",p==="settlement"); $("#tool-city").classList.toggle("sel",p==="city"); }
+
+function drawBoard(recs=null){
+  const svg = $("#svg");
+  svg.setAttribute("viewBox", L.viewBox.join(" "));
+  svg.innerHTML = "";
+  // hexes
+  L.hexes.forEach(h => {
+    const t = tiles[h.index];
+    const fill = t.resource ? RES[t.resource.toUpperCase()] : RES.DESERT;
+    const poly = el("polygon", {points:h.corners.map(c=>c.join(",")).join(" "), fill, class:"hex"}, svg);
+    poly.onclick = () => {
+      tiles[h.index] = sel.res==="DESERT" ? {resource:null,number:null} : {resource:sel.res, number:sel.num};
+      drawBoard();
+    };
+    if (t.resource && t.number){
+      el("circle", {cx:h.cx, cy:h.cy, r:15, fill:"#f5f0e6", stroke:"#0c0f14"}, svg);
+      const txt = el("text", {x:h.cx, y:h.cy+5, "text-anchor":"middle", "font-size":16,
+        "font-weight":700, fill:(t.number===6||t.number===8)?"#c0392b":"#1a1a1a"}, svg);
+      txt.textContent = t.number;
+    }
+  });
+  // ports
+  L.ports.forEach(p => {
+    const xy = L.nodes[p.node]; if(!xy) return;
+    const t = el("text", {x:xy[0], y:xy[1]-11, "text-anchor":"middle", "font-size":9, fill:"#7fd1ff"}, svg);
+    t.textContent = p.label;
+  });
+  // nodes
+  Object.entries(L.nodes).forEach(([id, xy]) => {
+    const o = owner[id];
+    const c = el("circle", {cx:xy[0], cy:xy[1], r:o?9:6, class:"node",
+      fill:o?PLAYERS[o.color]:"#33445a"}, svg);
+    if (o && o.piece==="city") c.setAttribute("stroke-width", 3);
+    c.onclick = (ev) => { ev.stopPropagation(); toggleNode(id); };
+  });
+  // recommendation badges — colored for the player being advised
+  if (recs) {
+    const adviseColor = PLAYERS[sel.advise] || "#4da3ff";
+    recs.slice(0,5).forEach((r,i) => {
+      const xy = L.nodes[r.node]; if(!xy) return;
+      el("circle", {cx:xy[0], cy:xy[1], r:13, fill:adviseColor, stroke:"#04121f", "stroke-width":2}, svg);
+      const t = el("text", {x:xy[0], y:xy[1]+5, "text-anchor":"middle", "font-size":14, "font-weight":700, fill:"#04121f"}, svg);
+      t.textContent = i+1;
+    });
+  }
+}
+
+function toggleNode(id){
+  const o = owner[id];
+  if (o && o.color===sel.player && o.piece===sel.piece) delete owner[id];
+  else owner[id] = {color:sel.player, piece:sel.piece};
+  drawBoard();
+}
+
+function placements(){
+  const p = {};
+  for (const id in owner){
+    const {color, piece} = owner[id];
+    p[color] = p[color] || {settlements:[], cities:[]};
+    (piece==="city" ? p[color].cities : p[color].settlements).push(+id);
+  }
+  return p;
+}
+
+async function getAdvice(){
+  const out = $("#out"); out.innerHTML = "<p class='hint'>thinking…</p>";
+  const body = {tiles, placements:placements(), advise_for:sel.advise};
+  const res = await fetch("/api/advise", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const data = await res.json();
+  if (!res.ok){ out.innerHTML = `<div class='err'>${data.error}</div>`; drawBoard(); return; }
+  const top = data.recs.slice(0,5);
+  out.innerHTML = `<p class='hint'>Best opening settlements for ${sel.advise}:</p>` +
+    top.map((r,i)=>`<div class="rec"><b>${i+1}. node ${r.node}</b><br>${r.why}</div>`).join("");
+  drawBoard(data.recs);
+}
+
+init();
+</script>
+</body>
+</html>
